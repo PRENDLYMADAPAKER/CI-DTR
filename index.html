@@ -85,6 +85,32 @@
   .success {
     color: #b7f5d0;
   }
+  /* New buttons for Time In/Out */
+  #timeButtons {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 16px;
+  }
+  #timeinBtn, #timeoutBtn {
+    flex: 1;
+    margin: 0 4px;
+    font-weight: 700;
+    padding: 10px;
+  }
+  #timeinBtn {
+    background: #4ade80; /* green */
+    color: #021124;
+  }
+  #timeoutBtn {
+    background: #ef4444; /* red */
+    color: white;
+  }
+  #attendanceStatus {
+    margin-top: 12px;
+    font-weight: 600;
+    text-align: center;
+    color: #60a5fa;
+  }
   </style>
 </head>
 <body>
@@ -133,6 +159,13 @@
       <div class="muted small">Your QR (show to admin to Time In)</div>
       <div id="qr" aria-hidden="true"></div>
 
+      <!-- Added Time In/Out Buttons -->
+      <div id="timeButtons">
+        <button id="timeinBtn" disabled>Time In</button>
+        <button id="timeoutBtn" disabled>Time Out</button>
+      </div>
+      <div id="attendanceStatus"></div>
+
       <div style="margin-top:12px">
         <div class="muted small">Your Time-In history</div>
         <table aria-live="polite">
@@ -177,6 +210,11 @@
     const switchToRegister = document.getElementById('switchToRegister');
     const messageEl = document.getElementById('message');
 
+    const timeInBtn = document.getElementById('timeinBtn');
+    const timeOutBtn = document.getElementById('timeoutBtn');
+    const attendanceStatus = document.getElementById('attendanceStatus');
+
+    // Toggle forms
     switchToLogin.onclick = () => {
       document.getElementById('registerForm').style.display = 'none';
       document.getElementById('loginForm').style.display = 'block';
@@ -280,6 +318,132 @@
     // Logout user
     logoutBtn.onclick = () => auth.signOut();
 
+    // Helper to get current date string YYYY-MM-DD
+    function getToday() {
+      const d = new Date();
+      return d.toISOString().slice(0, 10);
+    }
+    // Helper to get current time HH:mm:ss
+    function getCurrentTime() {
+      const d = new Date();
+      return d.toTimeString().slice(0, 8);
+    }
+
+    // Update Time In/Out button states and attendance status
+    async function updateAttendanceStatus(user) {
+      attendanceStatus.textContent = '';
+      timeInBtn.disabled = true;
+      timeOutBtn.disabled = true;
+
+      const today = getToday();
+      const dtrRef = db.ref(`users/${user.uid}/dtr/${today}`);
+
+      try {
+        const snapshot = await dtrRef.get();
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          if (data.timeIn && data.timeOut) {
+            attendanceStatus.textContent = `You have timed in at ${data.timeIn} and timed out at ${data.timeOut}.`;
+            timeInBtn.disabled = true;
+            timeOutBtn.disabled = true;
+          } else if (data.timeIn && !data.timeOut) {
+            attendanceStatus.textContent = `You timed in at ${data.timeIn}. Please remember to Time Out.`;
+            timeInBtn.disabled = true;
+            timeOutBtn.disabled = false;
+          } else {
+            // shouldn't happen because timeIn exists but empty timeOut
+            timeInBtn.disabled = false;
+            timeOutBtn.disabled = true;
+          }
+        } else {
+          attendanceStatus.textContent = 'You have not timed in today. Please Time In.';
+          timeInBtn.disabled = false;
+          timeOutBtn.disabled = true;
+        }
+      } catch (err) {
+        attendanceStatus.textContent = 'Error loading attendance status.';
+        attendanceStatus.style.color = '#ef4444'; // red
+      }
+    }
+
+    // Time In button click handler
+    timeInBtn.onclick = async () => {
+      const user = auth.currentUser;
+      if (!user) return;
+
+      timeInBtn.disabled = true;
+      attendanceStatus.textContent = 'Recording Time In...';
+
+      const today = getToday();
+      const time = getCurrentTime();
+
+      try {
+        const dtrRef = db.ref(`users/${user.uid}/dtr/${today}`);
+        const snapshot = await dtrRef.get();
+
+        if (snapshot.exists() && snapshot.val().timeIn) {
+          attendanceStatus.textContent = 'You have already timed in today.';
+          timeInBtn.disabled = true;
+          timeOutBtn.disabled = false;
+          return;
+        }
+
+        await dtrRef.set({
+          timeIn: time,
+          tsIn: Date.now()
+        });
+
+        attendanceStatus.textContent = `Time In recorded at ${time}.`;
+        timeInBtn.disabled = true;
+        timeOutBtn.disabled = false;
+      } catch (err) {
+        attendanceStatus.textContent = `Failed to record Time In: ${err.message}`;
+        attendanceStatus.style.color = '#ef4444';
+        timeInBtn.disabled = false;
+      }
+    };
+
+    // Time Out button click handler
+    timeOutBtn.onclick = async () => {
+      const user = auth.currentUser;
+      if (!user) return;
+
+      timeOutBtn.disabled = true;
+      attendanceStatus.textContent = 'Recording Time Out...';
+
+      const today = getToday();
+      const time = getCurrentTime();
+
+      try {
+        const dtrRef = db.ref(`users/${user.uid}/dtr/${today}`);
+        const snapshot = await dtrRef.get();
+
+        if (!snapshot.exists() || !snapshot.val().timeIn) {
+          attendanceStatus.textContent = 'You must Time In first!';
+          attendanceStatus.style.color = '#ef4444';
+          timeOutBtn.disabled = false;
+          return;
+        }
+        if (snapshot.val().timeOut) {
+          attendanceStatus.textContent = 'You have already timed out today.';
+          timeOutBtn.disabled = true;
+          return;
+        }
+
+        await dtrRef.update({
+          timeOut: time,
+          tsOut: Date.now()
+        });
+
+        attendanceStatus.textContent = `Time Out recorded at ${time}.`;
+        timeOutBtn.disabled = true;
+      } catch (err) {
+        attendanceStatus.textContent = `Failed to record Time Out: ${err.message}`;
+        attendanceStatus.style.color = '#ef4444';
+        timeOutBtn.disabled = false;
+      }
+    };
+
     // Update UI based on auth state
     auth.onAuthStateChanged(async user => {
       if (user) {
@@ -313,6 +477,14 @@
           const body = document.getElementById('recordsBody');
           body.innerHTML = '';
           if (!snap.exists()) {
+            body.innerHTML = '<tr><td colspan="2" class="
+              // Listen to user's Time In records
+        const recordsRef = db.ref('users/' + user.uid + '/dtr');
+        recordsRef.off();
+        recordsRef.on('value', snap => {
+          const body = document.getElementById('recordsBody');
+          body.innerHTML = '';
+          if (!snap.exists()) {
             body.innerHTML = '<tr><td colspan="2" class="muted">No records yet</td></tr>';
             return;
           }
@@ -320,17 +492,25 @@
           const keys = Object.keys(data).sort().reverse();
           for (const k of keys) {
             const r = data[k];
-            body.innerHTML += `<tr><td>${k}</td><td>${r.timeIn}</td></tr>`;
+            const timeIn = r.timeIn || '-';
+            const timeOut = r.timeOut || '-';
+            body.innerHTML += `<tr><td>${k}</td><td>In: ${timeIn} Out: ${timeOut}</td></tr>`;
           }
         });
+
+        // Update Time In/Out buttons status for today
+        updateAttendanceStatus(user);
       } else {
         document.getElementById('authArea').style.display = 'block';
         document.getElementById('userPanel').style.display = 'none';
         messageEl.textContent = '';
+        attendanceStatus.textContent = '';
+        timeInBtn.disabled = true;
+        timeOutBtn.disabled = true;
       }
     });
 
-    // Enter key helper
+    // Enter key helper for forms
     document.addEventListener('keydown', e => {
       if (e.key === 'Enter') {
         const regShown = document.getElementById('registerForm').style.display !== 'none';
@@ -340,4 +520,4 @@
     });
   </script>
 </body>
-  </html>
+</html>
